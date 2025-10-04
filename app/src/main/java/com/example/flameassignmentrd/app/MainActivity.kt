@@ -1,4 +1,4 @@
-package com.example.flameassignmentrd
+package com.example.flameassignmentrd.app
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
