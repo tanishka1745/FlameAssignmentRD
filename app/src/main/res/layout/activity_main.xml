@@ -4,7 +4,7 @@
     android:layout_height="match_parent">
 
 
-    <GLTextureView
+    <com.example.flameassignmentrd.gl.GLTextureView
         android:id="@+id/glView"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
