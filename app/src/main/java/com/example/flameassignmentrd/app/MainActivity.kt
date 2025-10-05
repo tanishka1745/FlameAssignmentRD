@@ -26,7 +26,7 @@ class MainActivity : AppCompatActivity() {
         private const val REQ_CAMERA = 100
     }
 
-    private lateinit var glView: GLTextureView      // Keep your existing GLTextureView type
+    private lateinit var glView: GLTextureView
     private lateinit var renderer: GLRenderer
     private lateinit var cameraHelper: Camera2Helper
     private lateinit var tvFps: TextView
@@ -44,8 +44,6 @@ class MainActivity : AppCompatActivity() {
         // initialize renderer and GL view
         renderer = GLRenderer()
         glView.setRenderer(renderer)
-        // If your GL view supports render modes, you can use RENDERMODE_WHEN_DIRTY and call requestRender()
-        // glView.renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
 
         cameraHelper = Camera2Helper(this)
 
