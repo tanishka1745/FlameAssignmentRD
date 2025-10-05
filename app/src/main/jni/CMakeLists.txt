@@ -23,3 +23,4 @@ target_link_libraries(
         ${log-lib}
         /Users/tanishkasharma/Downloads/OpenCV-android-sdk/sdk/native/libs/${ANDROID_ABI}/libopencv_java4.so
 )
+
