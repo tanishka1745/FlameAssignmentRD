@@ -24,15 +24,7 @@
 
 ---
 
-## 📷 Screenshots
 
-| Android Camera View | Web Frame Viewer |
-|--------------------|----------------|
-| ![Android](docs/android_preview.png) | ![Web](docs/web_preview.png) |
-
-> *(Add your own screenshots or GIFs in the `docs/` folder)*
-
----
 
 ## ⚙ Setup Instructions
 
