@@ -10,10 +10,17 @@ import android.graphics.YuvImage
 import android.media.Image
 import android.os.Bundle
 import android.util.Log
+import android.util.Size
 import android.view.Surface
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.flameassignmentrd.R
@@ -27,124 +34,129 @@ import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var glView: GLTextureView
+    private lateinit var renderer: GLRenderer
+
     companion object {
         private const val TAG = "MainActivity"
         private const val REQ_CAMERA = 100
     }
 
-    private lateinit var glView: GLTextureView
-    private lateinit var renderer: GLRenderer
-    private lateinit var cameraHelper: Camera2Helper
-    private lateinit var tvFps: TextView
-
-    private var frames = 0
-    private var lastTs = System.currentTimeMillis()
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.d(TAG, "onCreate called")
         setContentView(R.layout.activity_main)
 
         glView = findViewById(R.id.glView)
-        tvFps = findViewById(R.id.tvFps)
-
-        // initialize renderer and GL view
         renderer = GLRenderer()
+        Log.d(TAG, "Setting renderer")
         glView.setRenderer(renderer)
 
-        cameraHelper = Camera2Helper(this)
-
-        findViewById<Button>(R.id.btnToggle).setOnClickListener {
-            renderer.showProcessed = !renderer.showProcessed
-            renderer.invert = !renderer.invert
-            glView.requestRender()
-        }
-
-        // FPS counter updater
-        Thread {
-            while (true) {
-                Thread.sleep(500)
-                runOnUiThread {
-                    val now = System.currentTimeMillis()
-                    val fps = if (lastTs > 0) (frames * 1000 / (now - lastTs)) else 0
-                    tvFps.text = "FPS: $fps"
-                    frames = 0
-                    lastTs = now
-                }
+        // Wait for SurfaceTexture before starting CameraX
+        renderer.onSurfaceCreatedCallback = {
+            Log.d(TAG, "SurfaceTexture ready")
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED
+            ) {
+                Log.d(TAG, "Camera permission granted, starting CameraX")
+                startCameraX()
+            } else {
+                Log.d(TAG, "Camera permission not granted, requesting")
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(android.Manifest.permission.CAMERA),
+                    REQ_CAMERA
+                )
             }
-        }.start()
-
-        // Check permission and start camera when ready
-        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.CAMERA), REQ_CAMERA)
-        } else {
-            startCameraWhenReady()
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQ_CAMERA && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            startCameraWhenReady()
+        Log.d(TAG, "onRequestPermissionsResult: $requestCode, $grantResults")
+        if (requestCode == REQ_CAMERA && grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.d(TAG, "Camera permission granted in onRequestPermissionsResult")
+            startCameraX()
         } else {
-            Log.e(TAG, "Camera permission not granted")
+            Log.e(TAG, "Camera permission denied")
+            Toast.makeText(this, "Camera permission required", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // Wait for renderer SurfaceTexture to be available, then start camera
-    private fun startCameraWhenReady() {
-        thread {
-            val timeoutMs = 5000L
-            val start = System.currentTimeMillis()
-            var st: SurfaceTexture? = null
-            while (System.currentTimeMillis() - start < timeoutMs && st == null) {
-                st = renderer.getSurfaceTexture()
-                Thread.sleep(50)
+    private fun startCameraX() {
+        Log.d(TAG, "startCameraX called")
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener({
+            Log.d(TAG, "CameraProvider ready")
+            val cameraProvider = cameraProviderFuture.get()
+
+            val surfaceTexture = renderer.getSurfaceTexture()
+            if (surfaceTexture == null) {
+                Log.e(TAG, "SurfaceTexture is null, cannot start preview")
+                return@addListener
             }
 
-            if (st == null) {
-                Log.e(TAG, "SurfaceTexture not available after timeout")
-                return@thread
-            }
+            surfaceTexture.setDefaultBufferSize(640, 480)
+            val surface = Surface(surfaceTexture)
+            Log.d(TAG, "Surface created from SurfaceTexture")
 
-            val surface = Surface(st)
-            runOnUiThread {
-                try {
-                    cameraHelper.start(surface, { image -> onImageAvailable(image) }, 640, 480)
-                } catch (ex: Exception) {
-                    Log.e(TAG, "Failed to start camera: ${ex.message}", ex)
+            val preview = Preview.Builder()
+                .setTargetResolution(Size(640, 480))
+                .build()
+                .also {
+                    it.setSurfaceProvider { request ->
+                        Log.d(TAG, "Providing surface to Preview")
+                        request.provideSurface(surface, ContextCompat.getMainExecutor(this)) {}
+                    }
                 }
+
+            val imageAnalyzer = ImageAnalysis.Builder()
+                .setTargetResolution(Size(640, 480))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also {
+                    it.setAnalyzer(ContextCompat.getMainExecutor(this)) { imageProxy ->
+                        Log.d(TAG, "Analyzing frame")
+                        processImageProxy(imageProxy)
+                    }
+                }
+
+            try {
+                Log.d(TAG, "Unbinding all use cases")
+                cameraProvider.unbindAll()
+                Log.d(TAG, "Binding lifecycle")
+                cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalyzer)
+                Log.d(TAG, "CameraX bound successfully")
+            } catch (exc: Exception) {
+                Log.e(TAG, "Use case binding failed", exc)
             }
-        }
+        }, ContextCompat.getMainExecutor(this))
     }
-    // Process each incoming Image. Caller MUST close the Image (we do it in finally).
-    private fun nv21ToBitmap(nv21: ByteArray, width: Int, height: Int): Bitmap {
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
-        val byteArray = out.toByteArray()
-        return BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size)
-    }
-    private fun onImageAvailable(image: Image) {
+
+    private fun processImageProxy(imageProxy: ImageProxy) {
         try {
-            val nv21 = imageToNV21(image)
-            val processedBytes = NativeBridge.processNV21(nv21, image.width, image.height)
+            Log.d(TAG, "Processing frame from ImageProxy")
+            val nv21 = yuv420ToNV21(imageProxy)
+            val processedBytes = NativeBridge.processNV21(nv21, imageProxy.width, imageProxy.height)
 
-            val rawBitmap = nv21ToBitmap(nv21, image.width, image.height)
-            val processedBitmap = nv21ToBitmap(processedBytes, image.width, image.height)
+            val rawBitmap = nv21ToBitmap(nv21, imageProxy.width, imageProxy.height)
+            val processedBitmap = nv21ToBitmap(processedBytes, imageProxy.width, imageProxy.height)
 
-            renderer.updateFrames(rawBitmap, processedBitmap)
-            glView.requestRender()
-
-            frames++
+            glView.updateFrames(rawBitmap, processedBitmap)
+            Log.d(TAG, "Frame updated on GL view")
         } catch (ex: Exception) {
             Log.e(TAG, "Error processing frame", ex)
         } finally {
-            image.close()
+            imageProxy.close()
         }
     }
 
-    // Robust NV21 conversion for YUV_420_888 -> NV21 (VU interleaved)
-    private fun imageToNV21(image: Image): ByteArray {
+    private fun yuv420ToNV21(image: ImageProxy): ByteArray {
+        Log.d(TAG, "Converting YUV_420_888 to NV21")
         val width = image.width
         val height = image.height
         val ySize = width * height
@@ -155,42 +167,40 @@ class MainActivity : AppCompatActivity() {
         val uPlane = image.planes[1]
         val vPlane = image.planes[2]
 
-        // Copy Y plane
         yPlane.buffer.get(nv21, 0, ySize)
 
-        // Copy UV planes safely
-        val uvBuffer = ByteArray(uPlane.buffer.remaining() * 2) // temporary buffer
-        var pos = ySize
         val uvRowStride = uPlane.rowStride
         val uvPixelStride = uPlane.pixelStride
+        var pos = ySize
 
         for (row in 0 until height / 2) {
             for (col in 0 until width / 2) {
                 val uIndex = row * uvRowStride + col * uvPixelStride
                 val vIndex = row * uvRowStride + col * uvPixelStride
-                val vByte = vPlane.buffer.getOrNull(vIndex) ?: 0
-                val uByte = uPlane.buffer.getOrNull(uIndex) ?: 0
-                nv21[pos++] = vByte
-                nv21[pos++] = uByte
+                nv21[pos++] = vPlane.buffer.getOrNull(vIndex)
+                nv21[pos++] = uPlane.buffer.getOrNull(uIndex)
             }
         }
-
         return nv21
     }
 
-    // Safe ByteBuffer getOrNull extension
-    private fun ByteBuffer.getOrNull(index: Int): Byte {
-        return if (index >= 0 && index < limit()) get(index) else 0
+    private fun ByteBuffer.getOrNull(index: Int): Byte = if (index in 0 until limit()) get(index) else 0
+
+    private fun nv21ToBitmap(nv21: ByteArray, width: Int, height: Int): Bitmap {
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        val out = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
+        return BitmapFactory.decodeByteArray(out.toByteArray(), 0, out.size())
     }
 
     override fun onResume() {
         super.onResume()
+        Log.d(TAG, "onResume called")
         glView.onResume()
     }
 
     override fun onPause() {
-        // stop camera before pausing GL
-        cameraHelper.stop()
+        Log.d(TAG, "onPause called")
         glView.onPause()
         super.onPause()
     }

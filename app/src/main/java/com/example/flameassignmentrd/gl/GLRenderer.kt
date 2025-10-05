@@ -19,12 +19,15 @@ import java.nio.FloatBuffer
 class GLRenderer : GLSurfaceView.Renderer {
 
     private var surfaceTexture: SurfaceTexture? = null
-    private var rawBitmap: Bitmap? = null
-    private var processedBitmap: Bitmap? = null
     private var textureId = -1
 
-    var showProcessed = true   // Toggle raw/processed
-    var invert = false         // Optional invert effect
+    private var rawBitmap: Bitmap? = null
+    private var processedBitmap: Bitmap? = null
+
+    var showProcessed = true
+    var invert = false
+
+    var onSurfaceCreatedCallback: (() -> Unit)? = null
 
     fun getSurfaceTexture(): SurfaceTexture? = surfaceTexture
 
@@ -44,8 +47,8 @@ class GLRenderer : GLSurfaceView.Renderer {
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
 
-        // Initialize SurfaceTexture for camera preview
         surfaceTexture = SurfaceTexture(textureId)
+        onSurfaceCreatedCallback?.invoke()
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -54,6 +57,8 @@ class GLRenderer : GLSurfaceView.Renderer {
 
     override fun onDrawFrame(gl: GL10?) {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+        surfaceTexture?.updateTexImage()  // ✅ Must update the SurfaceTexture
 
         val bitmap = if (showProcessed) processedBitmap else rawBitmap
         bitmap?.let {

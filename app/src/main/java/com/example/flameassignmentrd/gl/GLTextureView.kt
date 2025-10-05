@@ -1,27 +1,43 @@
 package com.example.flameassignmentrd.gl
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.opengl.GLSurfaceView
 import android.util.AttributeSet
 
 /**
  * Custom GLSurfaceView for displaying camera frames.
- * Connects to GLRenderer.
- */
+ * Connects to GLRenderer. */
+
 class GLTextureView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : GLSurfaceView(context, attrs) {
 
+    private var renderer: GLRenderer? = null
+
     init {
-        // Use OpenGL ES 2.0
         setEGLContextClientVersion(2)
     }
 
     override fun setRenderer(renderer: Renderer) {
-        // Attach renderer
         super.setRenderer(renderer)
-        // Render only when data changes to save GPU
+        this.renderer = renderer as? GLRenderer
         renderMode = RENDERMODE_CONTINUOUSLY
+    }
+
+    fun updateFrames(raw: Bitmap, processed: Bitmap) {
+        renderer?.updateFrames(raw, processed)
+        requestRender()
+    }
+
+    fun toggleProcessed() {
+        renderer?.showProcessed = !renderer?.showProcessed!!
+        requestRender()
+    }
+
+    fun toggleInvert() {
+        renderer?.invert = !renderer?.invert!!
+        requestRender()
     }
 }
