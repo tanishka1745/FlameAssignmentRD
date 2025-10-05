@@ -1,6 +1,7 @@
 #include "image_utils.h"
 using namespace cv;
 
+// Converts a NV21 byte array (from Android camera) to an OpenCV Mat in BGR color format.
 cv::Mat nv21ToMat(jbyte* nv21, int width, int height) {
     cv::Mat yuv(height + height / 2, width, CV_8UC1, (unsigned char*)nv21);
     cv::Mat bgr;
@@ -8,6 +9,7 @@ cv::Mat nv21ToMat(jbyte* nv21, int width, int height) {
     return bgr;
 }
 
+// Applies Canny edge detection on a BGR image and returns a BGR edge image.
 cv::Mat applyCanny(const cv::Mat &input) {
     cv::Mat gray, edges;
     cv::cvtColor(input, gray, cv::COLOR_BGR2GRAY);
