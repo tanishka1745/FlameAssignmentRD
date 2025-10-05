@@ -1,8 +1,12 @@
 package com.example.flameassignmentrd.app
 
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Rect
 import android.graphics.SurfaceTexture
+import android.graphics.YuvImage
 import android.media.Image
 import android.os.Bundle
 import android.util.Log
@@ -15,6 +19,8 @@ import androidx.core.content.ContextCompat
 import com.example.flameassignmentrd.R
 import com.example.flameassignmentrd.gl.GLRenderer
 import com.example.flameassignmentrd.gl.GLTextureView
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import java.util.jar.Manifest
 import kotlin.concurrent.thread
 
@@ -50,8 +56,6 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnToggle).setOnClickListener {
             renderer.showProcessed = !renderer.showProcessed
             renderer.invert = !renderer.invert
-            Log.d(TAG, "Toggle clicked -> showProcessed=${renderer.showProcessed} invert=${renderer.invert}")
-            // Ask GL to redraw with new toggle state
             glView.requestRender()
         }
 
@@ -89,7 +93,6 @@ class MainActivity : AppCompatActivity() {
     // Wait for renderer SurfaceTexture to be available, then start camera
     private fun startCameraWhenReady() {
         thread {
-            // wait up to ~5 seconds for surface texture
             val timeoutMs = 5000L
             val start = System.currentTimeMillis()
             var st: SurfaceTexture? = null
@@ -106,8 +109,6 @@ class MainActivity : AppCompatActivity() {
             val surface = Surface(st)
             runOnUiThread {
                 try {
-                    Log.d(TAG, "Starting camera with preview surface")
-                    // start preview; cameraHelper's onImage callback must NOT close the Image, MainActivity will
                     cameraHelper.start(surface, { image -> onImageAvailable(image) }, 640, 480)
                 } catch (ex: Exception) {
                     Log.e(TAG, "Failed to start camera: ${ex.message}", ex)
@@ -116,30 +117,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
     // Process each incoming Image. Caller MUST close the Image (we do it in finally).
+    private fun nv21ToBitmap(nv21: ByteArray, width: Int, height: Int): Bitmap {
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        val out = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
+        val byteArray = out.toByteArray()
+        return BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size)
+    }
     private fun onImageAvailable(image: Image) {
         try {
-            Log.d(TAG, "Frame received ${image.width}x${image.height} format=${image.format}")
-            if (image.format != ImageFormat.YUV_420_888) {
-                Log.w(TAG, "Unexpected image format: ${image.format}")
-            }
-            val nv21 = imageToNV21(image) // robust conversion
-            val out = NativeBridge.processNV21(nv21, image.width, image.height)
-            if (out.isNotEmpty()) {
-                renderer.updateProcessed(out, image.width, image.height)
-                // ensure GL updates (if using RENDERMODE_WHEN_DIRTY)
-                glView.requestRender()
-            } else {
-                Log.w(TAG, "NativeBridge returned empty output")
-            }
+            val nv21 = imageToNV21(image)
+            val processedBytes = NativeBridge.processNV21(nv21, image.width, image.height)
+
+            val rawBitmap = nv21ToBitmap(nv21, image.width, image.height)
+            val processedBitmap = nv21ToBitmap(processedBytes, image.width, image.height)
+
+            renderer.updateFrames(rawBitmap, processedBitmap)
+            glView.requestRender()
+
             frames++
         } catch (ex: Exception) {
             Log.e(TAG, "Error processing frame", ex)
         } finally {
-            try {
-                image.close()
-            } catch (ex: Exception) {
-                Log.w(TAG, "Exception closing image", ex)
-            }
+            image.close()
         }
     }
 
@@ -148,62 +148,39 @@ class MainActivity : AppCompatActivity() {
         val width = image.width
         val height = image.height
         val ySize = width * height
-        val nv21 = ByteArray(ySize + ySize / 2)
+        val uvSize = width * height / 2
+        val nv21 = ByteArray(ySize + uvSize)
 
         val yPlane = image.planes[0]
         val uPlane = image.planes[1]
         val vPlane = image.planes[2]
 
-        val yBuffer = yPlane.buffer
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
+        // Copy Y plane
+        yPlane.buffer.get(nv21, 0, ySize)
 
-        val yRowStride = yPlane.rowStride
-        val yPixelStride = yPlane.pixelStride
+        // Copy UV planes safely
+        val uvBuffer = ByteArray(uPlane.buffer.remaining() * 2) // temporary buffer
+        var pos = ySize
         val uvRowStride = uPlane.rowStride
         val uvPixelStride = uPlane.pixelStride
 
-        // Copy Y
-        var pos = 0
-        val yRow = ByteArray(yRowStride)
-        for (row in 0 until height) {
-            yBuffer.position(row * yRowStride)
-            if (yPixelStride == 1) {
-                yBuffer.get(nv21, pos, width)
-                pos += width
-            } else {
-                yBuffer.get(yRow, 0, yRowStride)
-                var col = 0
-                while (col < width) {
-                    nv21[pos++] = yRow[col * yPixelStride]
-                    col++
-                }
+        for (row in 0 until height / 2) {
+            for (col in 0 until width / 2) {
+                val uIndex = row * uvRowStride + col * uvPixelStride
+                val vIndex = row * uvRowStride + col * uvPixelStride
+                val vByte = vPlane.buffer.getOrNull(vIndex) ?: 0
+                val uByte = uPlane.buffer.getOrNull(uIndex) ?: 0
+                nv21[pos++] = vByte
+                nv21[pos++] = uByte
             }
         }
 
-        // Copy interleaved VU
-        pos = ySize
-        val uRow = ByteArray(uvRowStride)
-        val vRow = ByteArray(uvRowStride)
-        val halfH = height / 2
-        val halfW = width / 2
-        for (row in 0 until halfH) {
-            uBuffer.position(row * uvRowStride)
-            vBuffer.position(row * uvRowStride)
-            uBuffer.get(uRow, 0, uvRowStride)
-            vBuffer.get(vRow, 0, uvRowStride)
-
-            var col = 0
-            for (i in 0 until halfW) {
-                val uIndex = i * uvPixelStride
-                val vIndex = i * uvPixelStride
-                // NV21 expects V then U
-                nv21[pos++] = vRow[vIndex]
-                nv21[pos++] = uRow[uIndex]
-                col += 2
-            }
-        }
         return nv21
+    }
+
+    // Safe ByteBuffer getOrNull extension
+    private fun ByteBuffer.getOrNull(index: Int): Byte {
+        return if (index >= 0 && index < limit()) get(index) else 0
     }
 
     override fun onResume() {
