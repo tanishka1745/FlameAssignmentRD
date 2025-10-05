@@ -23,6 +23,10 @@
 - Lightweight UI built in TypeScript + HTML + CSS
 
 ---
+### ScreenShot of implementing tech
+<img width="1348" height="447" alt="Screenshot 2025-10-05 at 6 26 11 PM" src="https://github.com/user-attachments/assets/815223f1-2e8b-48fc-9fc0-1513a6f7bb05" />
+
+
 
 
 
